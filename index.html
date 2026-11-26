@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Instagram Analytics – nagarmal_com</title>
 <meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <link rel="preconnect" href="https://script.google.com">
 <link rel="preconnect" href="https://script.googleusercontent.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -26,11 +27,20 @@ body::after{bottom:16px;right:16px;border-left:none;border-top:none}
 .top-bar{height:5px;background:linear-gradient(90deg,#c9a74e 0%,#a8cfb4 50%,#c9a74e 100%);background-size:200% 100%;animation:shimmer 4s linear infinite}
 @keyframes shimmer{to{background-position:-200% 0}}
 @keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
+@keyframes spin{to{transform:rotate(360deg)}}
 h1,h2,.serif{font-family:'Cormorant Garamond',Georgia,serif}
 header{position:relative;z-index:1;background:var(--card);border-bottom:1px solid var(--border);padding:18px 28px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
 header .eyebrow{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--gold)}
 header h1{margin:2px 0 0;font-size:30px;font-weight:700;color:var(--text);letter-spacing:.01em}
 header .sub{font-size:13px;color:var(--muted)}
+.live{display:inline-flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--na);display:inline-block}
+.dot.ok{background:var(--pos);box-shadow:0 0 0 3px rgba(79,154,106,0.18)}
+.dot.busy{background:var(--gold)}
+.dot.bad{background:var(--neg)}
+.spin{display:inline-block;animation:spin 1s linear infinite}
+.alert{position:relative;z-index:1;display:none;margin:12px auto 0;max-width:1400px;padding:10px 16px;border-radius:6px;font-size:14px;background:#fbefed;border:1px solid rgba(196,87,79,0.35);color:#8a3a33}
+.alert.on{display:block}
 .btn{border:1px solid var(--border);border-radius:6px;padding:8px 16px;font-family:'Jost',sans-serif;font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;background:var(--green-soft);color:var(--green);transition:all .2s}
 .btn:hover{background:var(--green);color:#fff}
 .btn.alt{background:var(--green);color:#fff;border-color:var(--green)}
@@ -123,13 +133,15 @@ a:hover{color:var(--gold)}
   <div>
     <div class="eyebrow">Nagarmal Sheonarain Private Limited</div>
     <h1>Instagram Analytics Dashboard</h1>
-    <div class="sub">@nagarmal_com ·  · <span id="updated">loading…</span></div>
+    <div class="sub">@nagarmal_com · <span class="live"><span class="dot" id="liveDot"></span><span id="updated">loading…</span></span></div>
+    <div class="sub" id="sheetInfo"></div>
   </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
     <button class="btn" id="refreshBtn">⟳ Refresh</button>
     <button class="btn ghost" id="logoutBtn">Lock</button>
   </div>
 </header>
+<div class="alert" id="alertBox"></div>
 
 <div class="bar">
   <label>Start date<input type="date" id="gStart"></label>
@@ -272,87 +284,173 @@ a:hover{color:var(--gold)}
 </section>
 </main>
 </div>
+
 <script>
 /* ============================================================
-   PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL BELOW (ends with /exec)
+   GOOGLE APPS SCRIPT WEB APP URL (ends with /exec)
    ============================================================ */
 const API_URL = "https://script.google.com/macros/s/AKfycbyXesXceHCJis7cmWkmnpNFzWiwRHikNL24PvFjUuTyDccFfAq1E-xM-0tqfq13ywdxDw/exec";
 /* ============================================================ */
+const AUTO_REFRESH_MIN = 5;                 // fetch fresh sheet data every 5 minutes while the page is open
+const CACHE_KEY = 'igdash_cache_v2';        // new key: old saved copies are ignored
+const REQUEST_TIMEOUT_MS = 60000;
 
 function api(payload) {
   if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(API_URL)) {
-    return Promise.reject(new Error('API_URL is not set in Index.html. Paste your Apps Script /exec URL.'));
+    return Promise.reject(new Error('API_URL is not set in index.html. Paste your Apps Script /exec URL.'));
   }
-  return fetch(API_URL, {
+  var ctrl = ('AbortController' in window) ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, REQUEST_TIMEOUT_MS) : null;
+  // ?t= stops any browser / proxy from returning an old answer
+  return fetch(API_URL + '?t=' + Date.now(), {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },   // text/plain avoids a CORS preflight
     body: JSON.stringify(payload),
-    redirect: 'follow'
-  }).then(function (r) { if (!r.ok) throw new Error('Server error ' + r.status); return r.json(); })
-    .then(function (j) { if (!j.ok) throw new Error(j.error || 'Request failed'); return j; });
+    redirect: 'follow',
+    cache: 'no-store',
+    signal: ctrl ? ctrl.signal : undefined
+  }).then(function (r) {
+    if (!r.ok) throw new Error('Server error ' + r.status);
+    return r.text();
+  }).then(function (txt) {
+    var j;
+    try { j = JSON.parse(txt); }
+    catch (e) { throw new Error('The Apps Script did not return data. Check that Code.gs is saved and deployed as a NEW version (Deploy → Manage deployments).'); }
+    if (!j.ok) throw new Error(j.error || 'Request failed');
+    return j;
+  }).catch(function (e) {
+    if (e && e.name === 'AbortError') throw new Error('The server took too long to answer. Please press Refresh.');
+    if (e && /Failed to fetch|NetworkError|Load failed/i.test(e.message)) throw new Error('Could not reach Google Apps Script. Check the internet connection and that the web app access is set to "Anyone".');
+    throw e;
+  }).finally(function () { if (timer) clearTimeout(timer); });
 }
 function toObjs(t) {
   if (!t || !t.h) return Array.isArray(t) ? t : [];
-  return t.r.map(function (row) { var o = {}; t.h.forEach(function (k, i) { o[k] = row[i]; }); return o; });
+  return (t.r || []).map(function (row) { var o = {}; t.h.forEach(function (k, i) { o[String(k).trim()] = row[i]; }); return o; });
 }
 </script>
 <script>
 var D = {comments: [], posts: [], daily: [], snapshots: [], totals: []};
-var charts = {}, POST_SORT = {k: 'date', dir: -1}, POST_PAGE = 1, CMP = [];
+var charts = {}, POST_SORT = {k: 'date', dir: -1}, POST_PAGE = 1, CMP = [], LOADING = false, TIMER = null, LAST_OK = 0;
 var $ = function (id) { return document.getElementById(id); };
 var fmt = function (n) { return (n === null || n === undefined || isNaN(n)) ? '–' : Math.round(n).toLocaleString('en-IN'); };
-var pct = function (n) { return (n === null || isNaN(n)) ? '–' : (n * 100).toFixed(2) + '%'; };
-var num = function (v) { var x = Number(String(v).replace(/,/g, '')); return isNaN(x) ? 0 : x; };
+var sfmt = function (n) { return (n === null || n === undefined || isNaN(n)) ? '–' : (n > 0 ? '+' : '') + fmt(n); };
+var pct = function (n) { return (n === null || n === undefined || isNaN(n)) ? '–' : (n * 100).toFixed(2) + '%'; };
+var num = function (v) { var x = Number(String(v == null ? '' : v).replace(/[,\s]/g, '')); return isNaN(x) ? 0 : x; };
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function link(text, href) { return /^https?:\/\//.test(href || '') ? '<a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(text) + '</a>' : esc(text); }
 
+/* ---- date helpers: every date becomes yyyy-mm-dd, whatever format the sheet shows ---- */
+function pad(n) { return (n < 10 ? '0' : '') + n; }
+function normDate(v) {
+  var s = String(v == null ? '' : v).trim().replace(/^'/, '');
+  if (!s) return '';
+  var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return m[1] + '-' + pad(+m[2]) + '-' + pad(+m[3]);
+  m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/);
+  if (m) {                                   // 21/11/2026 (India) or 11/21/2026 (US)
+    var a = +m[1], b = +m[2];
+    var day = a > 12 ? a : (b > 12 ? b : a), mon = a > 12 ? b : (b > 12 ? a : b);
+    return m[3] + '-' + pad(mon) + '-' + pad(day);
+  }
+  var d = new Date(s);
+  return isNaN(d) ? s : istDate(d);
+}
+function normTime(v) {
+  var m = String(v == null ? '' : v).trim().replace(/^'/, '').match(/^(\d{1,2}):(\d{2})/);
+  return m ? pad(+m[1]) + ':' + m[2] : '';
+}
+function istDate(d) { return new Date(d.getTime() + 5.5 * 3600000).toISOString().slice(0, 10); }   // date in India time
+function todayIST(offsetDays) { return istDate(new Date(Date.now() + (offsetDays || 0) * 86400000)); }
+
+/* ---- login ---- */
 var PW = '';
 try { PW = sessionStorage.getItem('igdash_pw') || ''; } catch (e) {}
-function showLogin(msg) { $('login').style.display = 'flex'; $('app').style.display = 'none'; $('loginErr').textContent = msg || ''; $('pw').focus(); }
+function showLogin(msg) { stopAuto(); $('login').style.display = 'flex'; $('app').style.display = 'none'; $('loginErr').textContent = msg || ''; $('pw').focus(); }
+function showApp() { $('login').style.display = 'none'; $('app').style.display = 'block'; }
 function doLogin() {
   var v = $('pw').value; if (!v) { $('loginErr').textContent = 'Please enter the password.'; return; }
   $('loginBtn').disabled = true; $('loginBtn').textContent = 'Checking…';
   api({action: 'login', pw: v}).then(function () {
     PW = v; try { sessionStorage.setItem('igdash_pw', v); } catch (e) {}
-    $('login').style.display = 'none'; $('app').style.display = 'block'; load();
+    showApp(); load(true); startAuto();
   }).catch(function (e) {
-    $('pw').value = ''; showLogin(/password/i.test(e.message) ? 'Incorrect password. Please try again.' : e.message);
+    $('pw').value = ''; showLogin(/incorrect password/i.test(e.message) ? 'Incorrect password. Please try again.' : e.message);
   }).finally(function () { $('loginBtn').disabled = false; $('loginBtn').textContent = 'Unlock Dashboard'; });
 }
-function logout() { PW = ''; try { sessionStorage.removeItem('igdash_pw'); localStorage.removeItem('igdash_cache'); } catch (e) {} showLogin(''); }
+function logout() {
+  PW = ''; D._shown = false;
+  try { sessionStorage.removeItem('igdash_pw'); localStorage.removeItem(CACHE_KEY); localStorage.removeItem('igdash_cache'); } catch (e) {}
+  showLogin('');
+}
+
+/* ---- live data ---- */
+function setStatus(state, text) {
+  $('liveDot').className = 'dot ' + state;
+  $('updated').innerHTML = text;
+}
+function showAlert(msg) { $('alertBox').innerHTML = msg ? '⚠️ ' + msg : ''; $('alertBox').classList.toggle('on', !!msg); }
+
 function load(force) {
   if (!PW) { showLogin(''); return; }
-  // 1) show the last saved copy instantly
-  if (!D._shown) { try { var c = JSON.parse(localStorage.getItem('igdash_cache') || 'null'); if (c) { apply(c, true); D._shown = true; } } catch (e) {} }
-  $('updated').textContent = D._shown ? 'updating…' : 'loading…';
+  if (LOADING) return;
+  LOADING = true;
+  // 1) show the last saved copy instantly (only the first time)
+  if (!D._shown) {
+    try { var c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); if (c) { apply(c, true); D._shown = true; } } catch (e) {}
+  }
+  setStatus('busy', '<span class="spin">⟳</span> ' + (D._shown ? 'Updating from Google Sheet…' : 'Loading from Google Sheet…'));
   $('refreshBtn').disabled = true;
-  // 2) fetch fresh data
-  api({action: 'data', pw: PW, refresh: force === true}).then(function (j) {
-    try { localStorage.setItem('igdash_cache', JSON.stringify(j.data)); } catch (e) {}
-    apply(j.data, false); D._shown = true;
+  // 2) always ask the server for fresh sheet data (refresh:true skips the 5-minute server cache)
+  api({action: 'data', pw: PW, refresh: force !== false}).then(function (j) {
+    if (!j.data) throw new Error('No data came back from the server.');
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(j.data)); } catch (e) {}
+    apply(j.data, false); D._shown = true; LAST_OK = Date.now(); showAlert('');
   }).catch(function (e) {
-    if (/password/i.test(e.message)) { logout(); return; }
-    $('updated').innerHTML = '<span class="err">Could not load data: ' + esc(e.message) + '</span>';
-  }).finally(function () { $('refreshBtn').disabled = false; });
+    if (/incorrect password/i.test(e.message)) { logout(); showLogin('Password changed. Please log in again.'); return; }
+    setStatus('bad', '<span class="err">Live update failed</span>');
+    showAlert('Live update failed: ' + esc(e.message) + (D._shown ? ' Showing the last saved copy.' : ''));
+  }).finally(function () { LOADING = false; $('refreshBtn').disabled = false; });
 }
+function startAuto() {
+  stopAuto();
+  TIMER = setInterval(function () { if (!document.hidden) load(true); }, AUTO_REFRESH_MIN * 60000);
+}
+function stopAuto() { if (TIMER) { clearInterval(TIMER); TIMER = null; } }
+document.addEventListener('visibilitychange', function () {
+  // coming back to the tab after a while → fetch fresh data
+  if (!document.hidden && PW && Date.now() - LAST_OK > 60000) load(true);
+});
+
 function apply(raw, fromCache) {
   var res = {updatedAt: raw.updatedAt, posts: toObjs(raw.posts), daily: toObjs(raw.daily), snapshots: toObjs(raw.snapshots), totals: toObjs(raw.totals), comments: toObjs(raw.comments)};
-    D.posts = (res.posts || []).map(function (r) {
-      var o = {id: r['Media ID'], date: r['Date (IST)'], time: r['Time (IST)'], type: r['Type'], caption: r['Caption'], link: r['Link'],
-        likes: num(r['Likes']), comments: num(r['Comments']), views: num(r['Views']), reach: num(r['Reach']), saves: num(r['Saves']),
-        shares: num(r['Shares']), inter: num(r['Total Interactions']), collected: r['Collected On']};
-      o.er = o.reach ? o.inter / o.reach : 0; return o;
-    });
-    // keep latest snapshot per media id (history stays in the sheet)
-    var latest = {}; D.posts.forEach(function (p) { if (!latest[p.id] || p.collected >= latest[p.id].collected) latest[p.id] = p; });
-    D.posts = Object.keys(latest).map(function (k) { return latest[k]; });
-    var dmap = {}; (res.daily || []).forEach(function (r) { var d = r['Date']; if (!d) return; if (!dmap[d] || r['Collected On'] >= dmap[d].c) dmap[d] = {date: d, newF: num(r['New Followers (net)']), reach: num(r['Reach']), c: r['Collected On']}; });
-    D.daily = Object.keys(dmap).sort().map(function (k) { return dmap[k]; });
-    D.snapshots = (res.snapshots || []).map(function (r) { return {date: r['Collected On'], followers: num(r['Followers']), following: num(r['Following']), media: num(r['Total Posts'])}; }).sort(function (a, b) { return a.date < b.date ? -1 : 1; });
-    D.totals = (res.totals || []).map(function (r) { return {c: r['Collected On'], start: r['Period Start'], end: r['Period End'], metric: r['Metric'], value: num(r['Value'])}; });
-    D.comments = (res.comments || []).map(function (r) { return {date: r['Date (IST)'], time: r['Time (IST)'], reel: r['Reel'], link: r['Reel Link'], user: r['Username'], comment: r['Comment'], category: r['Category'], group: r['Group'] || 'Neutral'}; });
-    $('updated').textContent = (fromCache ? 'Saved copy from ' : 'Data as of ') + new Date(res.updatedAt).toLocaleString('en-IN');
-    renderAll();
+  D.posts = res.posts.map(function (r) {
+    var o = {id: String(r['Media ID'] || '').replace(/^'/, ''), date: normDate(r['Date (IST)']), time: normTime(r['Time (IST)']), type: String(r['Type'] || '').toUpperCase(), caption: r['Caption'], link: r['Link'],
+      likes: num(r['Likes']), comments: num(r['Comments']), views: num(r['Views']), reach: num(r['Reach']), saves: num(r['Saves']),
+      shares: num(r['Shares']), inter: num(r['Total Interactions']), collected: normDate(r['Collected On'])};
+    o.er = o.reach ? o.inter / o.reach : 0; return o;
+  }).filter(function (p) { return p.id && p.date; });
+  // keep the latest snapshot per media id (history stays in the sheet)
+  var latest = {}; D.posts.forEach(function (p) { if (!latest[p.id] || p.collected >= latest[p.id].collected) latest[p.id] = p; });
+  D.posts = Object.keys(latest).map(function (k) { return latest[k]; });
+  var dmap = {}; res.daily.forEach(function (r) { var d = normDate(r['Date']); if (!d) return; var c = normDate(r['Collected On']);
+    if (!dmap[d] || c >= dmap[d].c) dmap[d] = {date: d, newF: num(r['New Followers (net)']), reach: num(r['Reach']), c: c}; });
+  D.daily = Object.keys(dmap).sort().map(function (k) { return dmap[k]; });
+  D.snapshots = res.snapshots.map(function (r) { return {date: normDate(r['Collected On']), followers: num(r['Followers']), following: num(r['Following']), media: num(r['Total Posts'])}; })
+    .filter(function (s) { return s.date; }).sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+  D.totals = res.totals.map(function (r) { return {c: normDate(r['Collected On']), start: normDate(r['Period Start']), end: normDate(r['Period End']), metric: String(r['Metric'] || '').trim(), value: num(r['Value'])}; });
+  D.comments = res.comments.map(function (r) { return {date: normDate(r['Date (IST)']), time: normTime(r['Time (IST)']), reel: r['Reel'], link: r['Reel Link'], user: r['Username'], comment: r['Comment'], category: r['Category'], group: r['Group'] || 'Neutral', added: normDate(r['Added On'])}; })
+    .filter(function (c) { return c.date; });
+
+  var when = res.updatedAt ? new Date(res.updatedAt).toLocaleString('en-IN', {timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '';
+  if (fromCache) setStatus('busy', 'Saved copy from ' + when);
+  else setStatus('ok', 'Live · fetched ' + when + ' IST');
+  // latest date the daily scheduled task wrote into the sheet
+  var lastSheet = [D.snapshots.length ? D.snapshots[D.snapshots.length - 1].date : '']
+    .concat(D.posts.map(function (p) { return p.collected; }), D.comments.map(function (c) { return c.added; }))
+    .reduce(function (m, d) { return d > m ? d : m; }, '');
+  $('sheetInfo').textContent = lastSheet ? 'Sheet last updated with Instagram data on ' + lastSheet + (lastSheet < todayIST(-1) ? ' (older than 1 day – check the daily scheduled task)' : '') : '';
+  renderAll();
 }
 
 function range() { return {s: $('gStart').value, e: $('gEnd').value, t: $('gType').value}; }
@@ -376,18 +474,23 @@ function group(rows, by, fields) {
   return Object.keys(m).sort().map(function (k) { return m[k]; });
 }
 
-function renderAll() { renderOverview(); renderReels(); renderAudience(); renderEngagement(); renderComments(); renderInsights(); }
+function renderAll() {
+  [renderOverview, renderReels, renderAudience, renderEngagement, renderComments, renderInsights].forEach(function (fn) {
+    try { fn(); } catch (e) { console.error(fn.name, e); }   // one broken section never stops the others
+  });
+}
 
 function renderOverview() {
   var snap = D.snapshots[D.snapshots.length - 1], P = posts(), T = latestTotals(), dl = daily();
   $('oFollowers').textContent = snap ? fmt(snap.followers) : '–';
-  $('oFollowersHint').textContent = snap ? 'as of ' + snap.date : '';
+  var prev = D.snapshots[D.snapshots.length - 2];
+  $('oFollowersHint').textContent = snap ? 'as of ' + snap.date + (prev ? ' (' + sfmt(snap.followers - prev.followers) + ' vs ' + prev.date + ')' : '') : '';
   $('oFollowing').textContent = snap ? fmt(snap.following) : '–';
   $('oMedia').textContent = snap ? fmt(snap.media) : '–';
   $('oReels').textContent = fmt(P.filter(function (p) { return p.type === 'REELS'; }).length);
   ['views', 'reach', 'likes', 'comments', 'shares', 'saves'].forEach(function (k) { $('o' + k.charAt(0).toUpperCase() + k.slice(1)).textContent = fmt(sum(P, k)); });
   var pv = T['Profile visits']; $('oProfile').textContent = pv ? fmt(pv.value) : '–'; $('oProfileHint').textContent = pv ? pv.start + ' to ' + pv.end : 'no data';
-  $('oGrowth').textContent = dl.length ? '+' + fmt(sum(dl, 'newF')) : '–';
+  $('oGrowth').textContent = dl.length ? sfmt(sum(dl, 'newF')) : '–';
   var g = group(dl, $('perfGroup').value, ['reach', 'newF']);
   chart('perfChart', {data: {labels: g.map(function (x) { return x.key; }), datasets: [
     {type: 'line', label: 'Reach', data: g.map(function (x) { return x.reach; }), borderColor: '#5b8c6a', backgroundColor: '#5b8c6a', yAxisID: 'y', tension: 0},
@@ -404,9 +507,9 @@ function renderReels() {
   document.querySelectorAll('#postHead th').forEach(function (th) { th.onclick = function () { var k = th.dataset.k; if (k === 'sel') return; POST_SORT = {k: k, dir: POST_SORT.k === k ? -POST_SORT.dir : -1}; POST_PAGE = 1; renderReels(); }; });
   var q = $('postSearch').value.trim().toLowerCase();
   var P = posts().filter(function (p) { return !q || String(p.caption).toLowerCase().indexOf(q) >= 0; });
-  P.sort(function (a, b) { var x = a[POST_SORT.k], y = b[POST_SORT.k]; return (x < y ? -1 : x > y ? 1 : 0) * POST_SORT.dir; });
+  P.sort(function (a, b) { var x = a[POST_SORT.k], y = b[POST_SORT.k]; if (POST_SORT.k === 'date') { x = a.date + a.time; y = b.date + b.time; } return (x < y ? -1 : x > y ? 1 : 0) * POST_SORT.dir; });
   window._postRows = P;
-  var size = +$('postSize').value, pages = Math.max(1, Math.ceil(P.length / size)); if (POST_PAGE > pages) POST_PAGE = pages;
+  var size = +$('postSize').value, pages = Math.max(1, Math.ceil(P.length / size)); if (POST_PAGE > pages) POST_PAGE = pages; if (POST_PAGE < 1) POST_PAGE = 1;
   $('postCount').textContent = P.length + ' records';
   $('postBody').innerHTML = P.length ? P.slice((POST_PAGE - 1) * size, POST_PAGE * size).map(function (p) {
     return '<tr><td><input type="checkbox" data-id="' + esc(p.id) + '"' + (CMP.indexOf(p.id) >= 0 ? ' checked' : '') + '></td><td class="cap">' + link(short(p.caption, 60), p.link) + '</td><td>' + esc(p.date) + '</td><td>' + esc(p.type) +
@@ -414,7 +517,7 @@ function renderReels() {
   }).join('') : '<tr><td colspan="11" class="empty">No posts match these filters.</td></tr>';
   $('postPage').textContent = POST_PAGE + ' / ' + pages; $('postPrev').disabled = POST_PAGE <= 1; $('postNext').disabled = POST_PAGE >= pages;
   document.querySelectorAll('#postBody input[type=checkbox]').forEach(function (cb) { cb.onchange = function () {
-    var id = cb.dataset.id; if (cb.checked) { if (CMP.length >= 4) { cb.checked = false; alert('You can compare up to 4 reels at a time.'); return; } CMP.push(id); } else CMP = CMP.filter(function (x) { return x !== id; }); renderCompare(); }; });
+    var id = cb.dataset.id; if (cb.checked) { if (CMP.length >= 4) { cb.checked = false; $('cmpNote').textContent = 'You can compare up to 4 reels at a time.'; return; } CMP.push(id); } else CMP = CMP.filter(function (x) { return x !== id; }); renderCompare(); }; });
   renderCompare();
 }
 function renderCompare() {
@@ -428,17 +531,17 @@ function renderCompare() {
 
 function renderAudience() {
   var dl = daily(), T = latestTotals();
-  $('aNew').textContent = dl.length ? '+' + fmt(sum(dl, 'newF')) : '–';
+  $('aNew').textContent = dl.length ? sfmt(sum(dl, 'newF')) : '–';
   var f = T['Follows'], u = T['Unfollows'];
   $('aFollows').textContent = f ? fmt(f.value) : '–'; $('aUnfollows').textContent = u ? fmt(u.value) : '–';
-  $('aNet').textContent = f && u ? '+' + fmt(f.value - u.value) : '–'; $('aPeriod').textContent = f ? f.start + ' to ' + f.end : '';
+  $('aNet').textContent = f && u ? sfmt(f.value - u.value) : '–'; $('aPeriod').textContent = f ? f.start + ' to ' + f.end : '';
   $('aAvg').textContent = dl.length ? fmt(avg(dl, 'newF')) : '–';
-  var best = dl.slice().sort(function (a, b) { return b.newF - a.newF; })[0]; $('aBest').textContent = best ? best.date + ' (+' + best.newF + ')' : '–';
+  var best = dl.slice().sort(function (a, b) { return b.newF - a.newF; })[0]; $('aBest').textContent = best ? best.date + ' (' + sfmt(best.newF) + ')' : '–';
   var g = group(dl, $('audGroup').value, ['newF']);
   chart('audChart', {type: 'bar', data: {labels: g.map(function (x) { return x.key; }), datasets: [{label: 'New followers', data: g.map(function (x) { return x.newF; }), backgroundColor: '#6fae84'}]}, options: {responsive: true, maintainAspectRatio: false, plugins: {legend: {display: false}}}});
 }
 
-var THEMES = [['Chhath / Puja', /छठ|chhath|puja|पूजा|मैया/i], ['Wedding / Bridal', /shaadi|शादी|wedding|bridal|dulhan|दुल्हन|lehenga|लगन|sherwani/i], ['Saree', /saree|साड़ी|sari/i],
+var THEMES = [['Chhath / Puja', /छठ|chhath|puja|पूजा|मैया/i], ['Wedding / Bridal', /shaadi|शादी|wedding|bridal|dulhan|दुल्हन|lehenga|लगन|sherwani|दूल्हे/i], ['Saree', /saree|साड़ी|sari/i],
   ['Jewellery / Gold', /gold|jewel|सोना|गहन|diamond|हीर|chandi/i], ['Hiring / Jobs', /hiring|job|career/i], ['Funny / Relatable', /funny|मज़ेदार|staff|wife|पत्नी|bhai|भाई|थक/i],
   ['Festival offers', /diwali|दिवाली|dhanteras|धनतेरस|karwa|करवा|navratri|dussehra|durga|offer|win/i], ['Kids', /kids|little|नन्हे/i]];
 function themeOf(p) { var t = THEMES.filter(function (x) { return x[1].test(p.caption || ''); }).map(function (x) { return x[0]; }); return t.length ? t : ['Other']; }
@@ -447,7 +550,7 @@ function renderEngagement() {
   $('eRate').textContent = totReach ? pct(sum(P, 'inter') / totReach) : '–';
   $('eLikes').textContent = fmt(avg(P, 'likes')); $('eComments').textContent = P.length ? avg(P, 'comments').toFixed(1) : '–';
   $('eViews').textContent = fmt(avg(R, 'views')); $('eShares').textContent = P.length ? avg(P, 'shares').toFixed(1) : '–'; $('eSaves').textContent = P.length ? avg(P, 'saves').toFixed(1) : '–';
-  var today = new Date(); today.setDate(today.getDate() - 2); var cutoff = today.toISOString().slice(0, 10);
+  var cutoff = todayIST(-2);
   var row = function (p) { return '<tr><td class="cap">' + link(short(p.caption, 45), p.link) + '</td><td>' + esc(p.date) + '</td><td class="n">' + fmt(p.views) + '</td><td class="n">' + pct(p.er) + '</td></tr>'; };
   var ok = P.filter(function (p) { return p.reach >= 1000; });
   $('bestBody').innerHTML = ok.slice().sort(function (a, b) { return b.er - a.er; }).slice(0, 5).map(row).join('') || '<tr><td colspan="4" class="empty">No data</td></tr>';
@@ -456,7 +559,7 @@ function renderEngagement() {
   P.forEach(function (p) { dv[(new Date(p.date + 'T00:00:00Z').getUTCDay() + 6) % 7].push(p.views); });
   chart('dowChart', {type: 'bar', data: {labels: days, datasets: [{label: 'Avg views', data: dv.map(function (a) { return a.length ? Math.round(a.reduce(function (s, x) { return s + x; }, 0) / a.length) : 0; }), backgroundColor: '#5b8c6a'}]}, options: {responsive: true, maintainAspectRatio: false, plugins: {legend: {display: false}, tooltip: {callbacks: {afterLabel: function (i) { return dv[i.dataIndex].length + ' posts'; }}}}}});
   var buckets = [['Morning (6–12)', 6, 12], ['Afternoon (12–16)', 12, 16], ['Evening (16–19)', 16, 19], ['Night (19–24)', 19, 24], ['Late night (0–6)', 0, 6]], hv = buckets.map(function () { return []; });
-  P.forEach(function (p) { var h = +String(p.time).slice(0, 2); buckets.forEach(function (b, i) { if (h >= b[1] && h < b[2]) hv[i].push(p.views); }); });
+  P.forEach(function (p) { if (!p.time) return; var h = +p.time.slice(0, 2); buckets.forEach(function (b, i) { if (h >= b[1] && h < b[2]) hv[i].push(p.views); }); });
   chart('hourChart', {type: 'bar', data: {labels: buckets.map(function (b) { return b[0]; }), datasets: [{label: 'Avg views', data: hv.map(function (a) { return a.length ? Math.round(a.reduce(function (s, x) { return s + x; }, 0) / a.length) : 0; }), backgroundColor: '#c9a74e'}]}, options: {responsive: true, maintainAspectRatio: false, plugins: {legend: {display: false}, tooltip: {callbacks: {afterLabel: function (i) { return hv[i.dataIndex].length + ' posts'; }}}}}});
   var tm = {}; P.forEach(function (p) { themeOf(p).forEach(function (t) { (tm[t] = tm[t] || []).push(p); }); });
   window._themes = Object.keys(tm).map(function (t) { var a = tm[t], r = sum(a, 'reach'); return {t: t, n: a.length, v: avg(a, 'views'), r: avg(a, 'reach'), er: r ? sum(a, 'inter') / r : 0}; }).sort(function (a, b) { return b.v - a.v; });
@@ -473,11 +576,11 @@ function renderComments() {
     {label: 'Negative', data: days.map(function (d) { return C.filter(function (c) { return c.date === d && c.group === 'Negative'; }).length; }), borderColor: '#d64545', backgroundColor: '#d64545', tension: 0},
     {label: 'Spam', data: days.map(function (d) { return C.filter(function (c) { return c.date === d && c.group === 'Spam'; }).length; }), borderColor: '#d9a21b', backgroundColor: '#d9a21b', tension: 0}]},
     options: {responsive: true, maintainAspectRatio: false, scales: {y: {beginAtZero: true, ticks: {precision: 0}}}}});
-  var wc = {}; C.filter(function (c) { return c.group === 'Negative'; }).forEach(function (c) { String(c.comment).toLowerCase().split(/[^a-z\u0900-\u097f]+/).forEach(function (w) { if (w.length > 2 && STOP.indexOf(w) < 0) wc[w] = (wc[w] || 0) + 1; }); });
+  var wc = {}; C.filter(function (c) { return c.group === 'Negative'; }).forEach(function (c) { String(c.comment).toLowerCase().split(/[^a-zऀ-ॿ]+/).forEach(function (w) { if (w.length > 2 && STOP.indexOf(w) < 0) wc[w] = (wc[w] || 0) + 1; }); });
   var kws = Object.keys(wc).map(function (w) { return [w, wc[w]]; }).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 15);
   $('kwBody').innerHTML = kws.length ? kws.map(function (k) { return '<tr><td>' + esc(k[0]) + '</td><td class="n">' + k[1] + '</td></tr>'; }).join('') : '<tr><td colspan="2" class="empty">No negative comments in the selected dates ✅</td></tr>';
-  var L = C.filter(function (c) { return (!g || c.group === g) && (!q || String(c.comment).toLowerCase().indexOf(q) >= 0); }).sort(function (a, b) { return (b.date + b.time) > (a.date + a.time) ? 1 : -1; }).slice(0, 100);
-  $('cBody').innerHTML = L.length ? L.map(function (c) { return '<tr><td>' + esc(c.date) + '</td><td>' + esc(c.user || '—') + '</td><td class="cap">' + esc(c.comment) + '</td><td>' + esc(c.category) + '</td><td><span class="pill ' + esc(c.group) + '">' + esc(c.group) + '</span></td><td>' + link(c.reel, c.link) + '</td></tr>'; }).join('') : '<tr><td colspan="6" class="empty">No comments found.</td></tr>';
+  var L = C.filter(function (c) { return (!g || c.group === g) && (!q || String(c.comment).toLowerCase().indexOf(q) >= 0); }).sort(function (a, b) { var x = a.date + a.time, y = b.date + b.time; return x < y ? 1 : x > y ? -1 : 0; }).slice(0, 100);
+  $('cBody').innerHTML = L.length ? L.map(function (c) { return '<tr><td>' + esc(c.date) + (c.time ? ' ' + esc(c.time) : '') + '</td><td>' + esc(c.user || '—') + '</td><td class="cap">' + esc(c.comment) + '</td><td>' + esc(c.category) + '</td><td><span class="pill ' + esc(c.group) + '">' + esc(c.group) + '</span></td><td>' + link(c.reel, c.link) + '</td></tr>'; }).join('') : '<tr><td colspan="6" class="empty">No comments found.</td></tr>';
 }
 
 function renderInsights() {
@@ -492,12 +595,12 @@ function renderInsights() {
   if (th.length >= 2) { add('good', '🎯 Best theme: <b>' + esc(th[0].t) + '</b> (average ' + fmt(th[0].v) + ' views, ' + th[0].n + ' posts). Weakest theme: <b>' + esc(th[th.length - 1].t) + '</b> (average ' + fmt(th[th.length - 1].v) + ' views).'); }
   var sh = P.slice().sort(function (a, b) { return b.shares - a.shares; })[0];
   if (sh && sh.shares > 0) add('', '🔁 Most shared: ' + link(short(sh.caption, 60), sh.link) + ' — <b>' + fmt(sh.shares) + ' shares</b>. Shared content reaches new people.');
-  var buckets = {}; P.forEach(function (p) { var h = +String(p.time).slice(0, 2), b = h < 12 ? 'morning' : h < 16 ? 'afternoon' : h < 19 ? 'evening' : 'night'; (buckets[b] = buckets[b] || []).push(p.views); });
+  var buckets = {}; P.forEach(function (p) { if (!p.time) return; var h = +p.time.slice(0, 2), b = h < 12 ? 'morning' : h < 16 ? 'afternoon' : h < 19 ? 'evening' : 'night'; (buckets[b] = buckets[b] || []).push(p.views); });
   var bs = Object.keys(buckets).filter(function (k) { return buckets[k].length >= 3; }).map(function (k) { var a = buckets[k]; return [k, a.reduce(function (s, x) { return s + x; }, 0) / a.length, a.length]; }).sort(function (a, b) { return b[1] - a[1]; });
   if (bs.length >= 2) add('', '⏰ Posts published in the <b>' + bs[0][0] + '</b> averaged ' + fmt(bs[0][1]) + ' views, versus ' + fmt(bs[bs.length - 1][1]) + ' in the <b>' + bs[bs.length - 1][0] + '</b>. Try to post more in the ' + bs[0][0] + '.');
   var rv = avg(R, 'reach'), fv = avg(P.filter(function (p) { return p.type === 'FEED'; }), 'reach');
   if (R.length && !isNaN(fv)) add('', '🎬 Average reach: reels <b>' + fmt(rv) + '</b>, photo posts <b>' + fmt(fv) + '</b>.');
-  var weak = P.filter(function (p) { return p.views < 3000; });
+  var weak = P.filter(function (p) { return p.views < 3000 && p.date <= todayIST(-2); });
   if (weak.length) add('warn', '⚠️ ' + weak.length + ' post(s) got fewer than 3,000 views, for example ' + weak.slice(0, 3).map(function (p) { return link(short(p.caption, 35), p.link); }).join(', ') + '. Review their hook (first 2 seconds), posting time and caption.');
   var lowC = P.filter(function (p) { return p.comments === 0 && p.views > 5000; }).length;
   if (lowC) { var qp = D.posts.filter(function (p) { return /\?|ya |kaunsi|कौन/i.test(p.caption || ''); }).sort(function (a, b) { return b.comments - a.comments; })[0];
@@ -511,10 +614,10 @@ function renderInsights() {
 
 function exportPosts(xlsx) {
   var rows = [['Date', 'Time', 'Type', 'Caption', 'Link', 'Views', 'Reach', 'Likes', 'Comments', 'Shares', 'Saves', 'Total Interactions', 'Engagement Rate']].concat((window._postRows || []).map(function (p) { return [p.date, p.time, p.type, p.caption, p.link, p.views, p.reach, p.likes, p.comments, p.shares, p.saves, p.inter, +(p.er * 100).toFixed(2)]; }));
-  var name = 'instagram-posts-' + new Date().toISOString().slice(0, 10);
-  if (xlsx) { if (typeof XLSX === 'undefined') { alert('Excel library did not load. Please use CSV.'); return; } var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Posts'); XLSX.writeFile(wb, name + '.xlsx'); return; }
-  var csv = rows.map(function (r) { return r.map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','); }).join('\r\n');
-  var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], {type: 'text/csv;charset=utf-8'})); a.download = name + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+  var name = 'instagram-posts-' + todayIST();
+  if (xlsx) { if (typeof XLSX === 'undefined') { showAlert('Excel library did not load. Please use CSV.'); return; } var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Posts'); XLSX.writeFile(wb, name + '.xlsx'); return; }
+  var csv = rows.map(function (r) { return r.map(function (v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }).join(','); }).join('\r\n');
+  var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + csv], {type: 'text/csv;charset=utf-8'})); a.download = name + '.csv'; document.body.appendChild(a); a.click(); a.remove();
 }
 
 document.querySelectorAll('#tabs .tab').forEach(function (b) { b.onclick = function () {
@@ -522,7 +625,7 @@ document.querySelectorAll('#tabs .tab').forEach(function (b) { b.onclick = funct
   document.querySelectorAll('section.page').forEach(function (s) { s.classList.toggle('on', s.id === 'p-' + b.dataset.p); });
   renderAll(); }; });
 ['gStart', 'gEnd', 'gType'].forEach(function (id) { $(id).onchange = function () { $('gQuick').value = ''; POST_PAGE = 1; renderAll(); }; });
-$('gQuick').onchange = function () { var n = +$('gQuick').value; if (!n) { $('gStart').value = ''; $('gEnd').value = ''; } else { var e = new Date(), s = new Date(); s.setDate(e.getDate() - n + 1); $('gStart').value = s.toISOString().slice(0, 10); $('gEnd').value = e.toISOString().slice(0, 10); } POST_PAGE = 1; renderAll(); };
+$('gQuick').onchange = function () { var n = +$('gQuick').value; if (!n) { $('gStart').value = ''; $('gEnd').value = ''; } else { $('gStart').value = todayIST(-(n - 1)); $('gEnd').value = todayIST(); } POST_PAGE = 1; renderAll(); };
 $('gClear').onclick = function () { $('gStart').value = ''; $('gEnd').value = ''; $('gQuick').value = ''; $('gType').value = ''; $('postSearch').value = ''; $('cSearch').value = ''; CMP = []; POST_PAGE = 1; renderAll(); };
 $('perfGroup').onchange = renderOverview; $('audGroup').onchange = renderAudience; $('topMetric').onchange = renderReels;
 $('postSearch').oninput = function () { POST_PAGE = 1; renderReels(); }; $('postSize').onchange = function () { POST_PAGE = 1; renderReels(); };
@@ -534,7 +637,8 @@ $('refreshBtn').onclick = function () { load(true); };
 $('logoutBtn').onclick = logout;
 $('loginBtn').onclick = doLogin;
 $('pw').addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
-if (PW) { $('login').style.display = 'none'; $('app').style.display = 'block'; load(); } else showLogin('');
+try { localStorage.removeItem('igdash_cache'); } catch (e) {}     // remove the old saved copy from the previous version
+if (PW) { showApp(); load(true); startAuto(); } else showLogin('');
 </script>
 </body>
 </html>
